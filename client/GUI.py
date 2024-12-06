@@ -163,13 +163,13 @@ def list_files():
     print(response)
     return response
 
-def change_directory():
+def change_directory(target_directory):
     global session_token, current_directory
     if not session_token:
         print("You must be logged in to change directories.")
         return
 
-    target_directory = input("Enter directory to change to (.. to go up, or a subdirectory): ")
+    
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(("localhost", 5000))
     client_socket.send(f"CD {session_token} {target_directory}".encode())
@@ -179,22 +179,11 @@ def change_directory():
     print(response)
     client_socket.close()
 
-def upload_file():
+def upload_file(filepath):
     global session_token, current_directory
 
     if not session_token:
         print("You must be logged in to upload files.")
-        return
-
-    # Select file to upload
-    root = Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    filepath = askopenfilename(title="Select a file to upload")
-    root.destroy()
-
-    if not filepath:
-        print("No file selected.")
         return
 
     try:
