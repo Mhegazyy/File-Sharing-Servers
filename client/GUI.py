@@ -377,7 +377,7 @@ def download_file():
 class ClientGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Secure File Client")
+        self.root.title("Hegazy's File Server Client")
         self.session_token = None
         self.current_directory = "/"
         self.current_username = None

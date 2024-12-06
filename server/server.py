@@ -533,6 +533,7 @@ def start_server_socket():
             client_thread = threading.Thread(target=handle_client_request, args=(client_socket,))
             client_thread.start()
         except OSError:
+            logging.info("Server socket accept operation interrupted.")
             break
 
     logging.info("Server socket has been shut down.")
@@ -541,6 +542,16 @@ def start_server_socket():
 def main():
     server_thread = threading.Thread(target=start_server_socket)
     server_thread.start()
+    try:
+        # Server logic
+        while True:
+            command = input("Type 'shutdown' to stop the server: ").strip().lower()
+            if command == "shutdown":
+                shutdown_server.set()
+                break
+    except KeyboardInterrupt:
+        logging.info("Server shutting down due to keyboard interrupt.")
+        shutdown_server.set()
     server_thread.join()
     logging.info("Server has been shut down.")
 
