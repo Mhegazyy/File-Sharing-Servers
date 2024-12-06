@@ -1,3 +1,4 @@
+import hashlib
 import socket
 import os
 import uuid
@@ -392,7 +393,6 @@ def handle_client_request(client_socket):
 
 
                 elif command == "UPLOAD":
-                    # Parse the command and validate input
                     if len(parts) > 1:
                         # Split the second part into session token and target file name
                         upload_parts = parts[1].split(maxsplit=1)
@@ -404,12 +404,11 @@ def handle_client_request(client_socket):
                                 username = active_sessions[session_token]["username"]
                                 user_root_directory = active_sessions[session_token]["directory"]
                                 current_directory = active_sessions[session_token]["current_directory"]
-                                target_file_name = upload_parts[1]
 
                                 logging.debug(f"Session token: {session_token}, User root: {user_root_directory}, Current directory: {current_directory}")
                                 logging.debug(f"Target file name: {target_file_name}")
 
-                                # Handle case where current_directory is the same as user_root_directory
+                                # Resolve directory
                                 if current_directory == f"/{username}" or current_directory == "":
                                     resolved_directory = user_root_directory
                                 else:
@@ -418,12 +417,16 @@ def handle_client_request(client_socket):
                                 abs_upload_path = os.path.abspath(os.path.join(resolved_directory, target_file_name))
                                 logging.debug(f"Resolved absolute upload path: {abs_upload_path}")
 
-                                # Validate the resolved path
+                                # Validate path
                                 if abs_upload_path.startswith(user_root_directory) and target_file_name and os.path.exists(os.path.dirname(abs_upload_path)):
                                     try:
                                         # Send "READY" to the client
                                         client_socket.send("READY".encode())
-                                        logging.debug("Sent READY to client. Awaiting AES key and file data.")
+                                        logging.debug("Sent READY to client. Awaiting file hash, AES key, and file data.")
+
+                                        # Receive file hash
+                                        file_hash = client_socket.recv(64).decode()
+                                        logging.debug(f"Received file hash: {file_hash}")
 
                                         # Receive encrypted AES key
                                         encrypted_aes_key = client_socket.recv(256)
@@ -466,10 +469,21 @@ def handle_client_request(client_socket):
                                         ciphertext = received_data[16:]
                                         decrypted_data = decrypt_file_data(ciphertext, aes_key, iv)
 
+                                        # Verify file integrity
+                                        computed_hash = hashlib.sha256(decrypted_data).hexdigest()
+                                        logging.debug(f"Computed file hash: {computed_hash}")
+
+                                        if computed_hash != file_hash:
+                                            logging.error("File hash mismatch. Upload rejected.")
+                                            client_socket.send("Error: File hash mismatch.".encode())
+                                            return
+
                                         # Save the file
                                         with open(abs_upload_path, "wb") as file:
                                             file.write(decrypted_data)
                                         logging.info(f"File uploaded successfully to: {abs_upload_path}")
+                                        client_socket.send("Upload successful.".encode())
+
                                     except Exception as e:
                                         logging.error(f"Error during file upload: {e}")
                                         client_socket.send(f"Error: {e}".encode())
@@ -485,6 +499,7 @@ def handle_client_request(client_socket):
                     else:
                         logging.warning(f"UPLOAD command received with insufficient arguments: {request_data}")
                         client_socket.send("Invalid UPLOAD command format.".encode())
+
 
 
 

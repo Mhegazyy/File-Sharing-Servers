@@ -15,10 +15,13 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 
 session_token = None  # Global session token variable
 current_directory = ""  # Track the current directory for navigation
-current_username = None  # Track the logged-in username
 
 # Directory for storing the client keys and server's public key
 CLIENT_KEY_DIR = os.path.expanduser("D:/TKH/Practical Cryptography/.client_keys")
+SERVER_PUBLIC_KEY_PATH = get_server_public_key_path()
+PRIVATE_KEY_PATH = get_private_key_path()
+PUBLIC_KEY_PATH = get_public_key_path()
+
 
 # Helper functions for dynamic paths
 def get_private_key_path():
@@ -34,7 +37,7 @@ def get_public_key_path():
 def get_server_public_key_path():
     return os.path.join(CLIENT_KEY_DIR, "server_public_key.pem")
 
-# Ensure directories exist
+
 os.makedirs(CLIENT_KEY_DIR, exist_ok=True)
 
 def retrieve_server_public_key():
@@ -43,15 +46,16 @@ def retrieve_server_public_key():
     client_socket.connect(("localhost", 5000))
     client_socket.sendall("GET_SERVER_PUBLIC_KEY".encode())
     server_public_key = client_socket.recv(1024)
-    with open(get_server_public_key_path(), "wb") as key_file:
+    with open(SERVER_PUBLIC_KEY_PATH, "wb") as key_file:
         key_file.write(server_public_key)
-    logging.info("Server's public key retrieved and saved.")
+    print("Server's public key retrieved and saved.")
     client_socket.close()
 
 def load_server_public_key():
     """Load the server's public RSA key from file."""
-    with open(get_server_public_key_path(), "rb") as key_file:
+    with open(SERVER_PUBLIC_KEY_PATH, "rb") as key_file:
         return serialization.load_pem_public_key(key_file.read())
+
 
 def generate_rsa_keys():
     """Generate RSA key pair, store private key securely, and return public key in PEM format."""
@@ -69,7 +73,7 @@ def generate_rsa_keys():
             private_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
+                encryption_algorithm=serialization.NoEncryption()
             )
         )
     public_key = private_key.public_key()
@@ -77,14 +81,37 @@ def generate_rsa_keys():
         public_file.write(
             public_key.public_bytes(
                 encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
             )
         )
     logging.info("Generated RSA keys successfully.")
 
+    """Generate RSA key pair, store private key securely, and return public key in PEM format."""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with open(PRIVATE_KEY_PATH, "wb") as private_file:
+        private_file.write(
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+        )
+    public_key = private_key.public_key()
+    with open(PUBLIC_KEY_PATH, "wb") as public_file:
+        public_file.write(
+            public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        )
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
 def load_private_key():
     """Load the client's private key from file."""
-    with open(get_private_key_path(), "rb") as key_file:
+    with open(PRIVATE_KEY_PATH, "rb") as key_file:
         return serialization.load_pem_private_key(key_file.read(), password=None)
 
 def compute_hash(filepath):
@@ -106,6 +133,7 @@ def encrypt_file(filepath, aes_key):
     encryptor = cipher.encryptor()
     encrypted_data = encryptor.update(padded_data) + encryptor.finalize()
     return iv + encrypted_data  # Prepend IV to encrypted data
+
 
 def encrypt_aes_key_with_rsa(aes_key, server_public_key):
     """Encrypt AES key using the server's RSA public key."""
@@ -130,8 +158,7 @@ def decrypt_file(encrypted_data, aes_key):
     return decrypted_data
 
 def send_request(command, extra_data="", username="", password=""):
-    """Send request to the server."""
-    global session_token, current_username
+    global session_token
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(("localhost", 5000))
     if session_token:
@@ -142,10 +169,9 @@ def send_request(command, extra_data="", username="", password=""):
         request_data = f"{command} {username} {password}"
     client_socket.send(request_data.encode())
     response = client_socket.recv(1024).decode()
-    logging.info(f"Server Response: {response}")
+    print(f"Server Response: {response}")
     if command == "LOGIN" and "Session token:" in response:
         session_token = response.split("Session token: ")[1].strip()
-        current_username = username  # Update the current username
     client_socket.close()
 
 def list_files():
@@ -163,18 +189,35 @@ def list_files():
     return response
 
 def change_directory():
+    """Change the current working directory on the server."""
     global session_token, current_directory
     if not session_token:
         print("You must be logged in to change directories.")
         return
 
-    target_directory = input("Enter directory to change to (.. to go up, or a subdirectory): ")
+    target_directory = input("Enter directory to change to (.. to go up, or a subdirectory or other user's directory): ")
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(("localhost", 5000))
     client_socket.send(f"CD {session_token} {target_directory}".encode())
+    
+    # Log the attempt to change directories
+    logging.debug(f"Attempting to change directory. Session token: {session_token}, Target directory: {target_directory}")
+
     response = client_socket.recv(1024).decode()
     if "Changed directory to:" in response:
-        current_directory = response.split("Changed directory to: ")[1].strip()
+        new_directory = response.split("Changed directory to: ")[1].strip()
+        user_root_directory = os.path.abspath(os.path.join("user_data", session_token.split('-')[0]))
+        abs_new_directory = os.path.abspath(os.path.join(user_root_directory, new_directory))
+
+        # Log the resolved absolute paths
+        logging.debug(f"Resolved new directory: {abs_new_directory}, User root directory: {user_root_directory}")
+
+        if abs_new_directory.startswith(user_root_directory):
+            current_directory = new_directory
+            logging.debug(f"Directory successfully changed to: {current_directory}")
+        else:
+            print("Attempt to traverse outside root directory was blocked.")
+            logging.warning(f"Attempt to traverse outside root directory: {abs_new_directory}")
     print(response)
     client_socket.close()
 
@@ -197,10 +240,6 @@ def upload_file():
         return
 
     try:
-        # Compute file hash
-        file_hash = compute_hash(filepath)
-        logging.debug(f"SHA-256 hash of file: {file_hash}")
-
         # Generate AES key and encrypt file data
         aes_key = os.urandom(32)  # 256-bit AES key
         encrypted_file_data = encrypt_file(filepath, aes_key)  # Encrypt the file
@@ -211,48 +250,43 @@ def upload_file():
         # Log details
         logging.debug(f"Original file size: {os.path.getsize(filepath)} bytes.")
         logging.debug(f"Encrypted file size: {len(encrypted_file_data)} bytes.")
-        logging.debug(f"Encrypted AES key size: {len(encrypted_aes_key)} bytes.")
 
         # Establish connection to the server
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.connect(("localhost", 5000))
 
         # Construct upload command
-        upload_path = filename  # Only send the file name now
+        upload_path = os.path.join(current_directory, filename).replace("\\", "/")
         command = f"UPLOAD {session_token} {upload_path}"
+        logging.debug(f"Constructed upload command: {command}")
+
+        # Send upload command and handle server response
         client_socket.send(command.encode())
         response = client_socket.recv(1024).decode()
+        logging.debug(f"Server response to upload command: {response}")
 
         if response != "READY":
             print(f"Server Error: {response}")
+            logging.error(f"Server error during upload. Response: {response}")
             return
-
-        # Send file hash
-        client_socket.sendall(file_hash.encode())
-        logging.debug("Sent file hash to server.")
 
         # Send encrypted AES key
         client_socket.sendall(encrypted_aes_key)
-        logging.debug("Sent encrypted AES key to server.")
 
         # Send file size
-        file_size = len(encrypted_file_data)
-        client_socket.sendall(file_size.to_bytes(8, 'big'))
-        logging.debug(f"Sent file size: {file_size} bytes to server.")
+        client_socket.sendall(len(encrypted_file_data).to_bytes(8, 'big'))
 
         # Send encrypted file data in chunks
         CHUNK_SIZE = 4096
-        for i in range(0, file_size, CHUNK_SIZE):
+        for i in range(0, len(encrypted_file_data), CHUNK_SIZE):
             client_socket.sendall(encrypted_file_data[i:i + CHUNK_SIZE])
-            logging.debug(f"Sent chunk: {i} to {i + CHUNK_SIZE}.")
 
+        logging.info(f"File '{filename}' uploaded successfully.")
         print(f"File '{filename}' uploaded successfully.")
     except Exception as e:
         logging.error(f"Error during upload: {e}")
     finally:
         client_socket.close()
-        logging.debug("Client socket closed.")
-
 
 
 def download_file():
@@ -326,17 +360,22 @@ def download_file():
 
         # Receive encrypted AES key
         encrypted_aes_key = client_socket.recv(aes_key_size)
-        logging.debug(f"Received encrypted AES key of size: {len(encrypted_aes_key)}")
-        private_key = load_private_key()
-        aes_key = private_key.decrypt(
-            encrypted_aes_key,
-            rsa_padding.OAEP(
-                mgf=rsa_padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
+        try:
+    # Decrypt the AES key
+            logging.debug(f"Decrypting AES key of size: {len(encrypted_aes_key)}")
+            private_key = load_private_key()
+            aes_key = private_key.decrypt(
+                encrypted_aes_key,
+                rsa_padding.OAEP(
+                    mgf=rsa_padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
             )
-        )
-        logging.debug("Decrypted AES key successfully.")
+            logging.debug("Decrypted AES key successfully.")
+        except Exception as e:
+            logging.error(f"Error during AES key decryption: {e}")
+            raise
 
         # Receive file size
         file_size_bytes = client_socket.recv(8)
@@ -372,10 +411,15 @@ def download_file():
         client_socket.close()
         logging.debug("Client socket closed.")
 
+
+
 def start_client():
-    global session_token, current_username
-    if not os.path.exists(get_server_public_key_path()):
+    global session_token
+    if not os.path.exists(SERVER_PUBLIC_KEY_PATH):
         retrieve_server_public_key()
+
+    if not os.path.exists(PRIVATE_KEY_PATH) or not os.path.exists(PUBLIC_KEY_PATH):
+        generate_rsa_keys()
 
     while True:
         if not session_token:
@@ -384,9 +428,7 @@ def start_client():
             if command == "REGISTER":
                 username = input("Username: ")
                 password = input("Password: ")
-                current_username = username  # Set username for key paths
-                generate_rsa_keys()
-                with open(get_public_key_path(), "rb") as pub_key_file:
+                with open(PUBLIC_KEY_PATH, "rb") as pub_key_file:
                     public_key_pem = pub_key_file.read()
                 send_request("REGISTER", username=username, password=password, extra_data=public_key_pem)
             elif command == "LOGIN":
@@ -403,18 +445,17 @@ def start_client():
             elif command == "DOWNLOAD":
                 download_file()
             elif command == "LIST":
-                list_files()
+                response = list_files()
+                print(response)
             elif command == "CD":
                 change_directory()
             elif command == "LOGOUT":
                 send_request("LOGOUT", extra_data=session_token)
                 session_token = None
-                current_username = None
             elif command == "EXIT":
                 if session_token:
                     send_request("LOGOUT", extra_data=session_token)
                     session_token = None
-                    current_username = None
                 break
 
 if __name__ == "__main__":
