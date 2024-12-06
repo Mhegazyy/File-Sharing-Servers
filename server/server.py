@@ -75,14 +75,13 @@ def list_directory(base_dir, relative_path=""):
     return response, directory_mapping
 
 def handle_download(client_socket, base_dir, session_token, requested_file):
-    """Handle the DOWNLOAD command."""
+    """Handle the DOWNLOAD command with checksum support."""
     try:
         logging.debug(f"Handling DOWNLOAD with session_token: {session_token}, requested_file: {requested_file}")
 
         # Validate session token
         if session_token not in active_sessions:
             logging.warning(f"Invalid session token: {session_token}")
-            logging.debug(f"Active sessions: {active_sessions}")
             client_socket.send("Invalid session token.".encode())
             return
 
@@ -91,16 +90,12 @@ def handle_download(client_socket, base_dir, session_token, requested_file):
         username = session_data["username"]
         user_root_directory = session_data["directory"]
         current_directory = session_data["current_directory"].lstrip("/")
-        logging.debug(f"Session data for token {session_token}: {session_data}")
 
         # Resolve the absolute file path
         if requested_file.startswith("/"):
-            # Remove leading "/" and resolve relative to the user's directory
             abs_file_path = os.path.abspath(os.path.join(user_root_directory, requested_file.lstrip("/")))
         else:
-            # Resolve relative to the current directory
             abs_file_path = os.path.abspath(os.path.join(user_root_directory, current_directory, requested_file))
-        logging.debug(f"Resolved absolute file path: {abs_file_path}")
 
         if not os.path.exists(abs_file_path):
             logging.warning(f"File not found: {abs_file_path}")
@@ -114,7 +109,10 @@ def handle_download(client_socket, base_dir, session_token, requested_file):
         # Read the file
         with open(abs_file_path, "rb") as file:
             file_data = file.read()
-        logging.debug(f"Read file of size: {len(file_data)} bytes")
+
+        # Compute checksum
+        file_checksum = hashlib.sha256(file_data).hexdigest()
+        logging.debug(f"Computed file checksum: {file_checksum}")
 
         # Encrypt the file with AES
         aes_key = os.urandom(32)  # 256-bit AES key
@@ -125,12 +123,9 @@ def handle_download(client_socket, base_dir, session_token, requested_file):
         padder = aes_padding.PKCS7(128).padder()
         padded_data = padder.update(file_data) + padder.finalize()
         encrypted_data = iv + encryptor.update(padded_data) + encryptor.finalize()
-        logging.debug(f"Encrypted file data size: {len(encrypted_data)} bytes")
 
         # Encrypt the AES key with the client's public RSA key
         client_public_key_path = os.path.join(user_root_directory, f"{username}_public_key.pem")
-        logging.debug(f"Looking for client public key at: {client_public_key_path}")
-
         if not os.path.exists(client_public_key_path):
             logging.warning(f"Client public key not found: {client_public_key_path}")
             client_socket.send("Client public key not found.".encode())
@@ -147,17 +142,19 @@ def handle_download(client_socket, base_dir, session_token, requested_file):
                 label=None
             )
         )
-        logging.debug(f"Encrypted AES key size: {len(encrypted_aes_key)} bytes")
 
         # Send AES key size and encrypted AES key
         client_socket.sendall(len(encrypted_aes_key).to_bytes(4, 'big'))
-        logging.debug("Sent AES key size to client.")
         client_socket.sendall(encrypted_aes_key)
-        logging.debug("Sent encrypted AES key to client.")
 
         # Send file size
         client_socket.sendall(len(encrypted_data).to_bytes(8, 'big'))
-        logging.debug(f"Sent file size: {len(encrypted_data)} bytes")
+
+        # Send checksum
+        checksum_bytes = file_checksum.encode()
+        client_socket.sendall(len(checksum_bytes).to_bytes(4, 'big'))
+        client_socket.sendall(checksum_bytes)
+        logging.debug("Sent checksum to client.")
 
         # Send the encrypted file data
         CHUNK_SIZE = 4096

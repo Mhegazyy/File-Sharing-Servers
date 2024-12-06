@@ -486,6 +486,7 @@ class ClientGUI:
         self.update_log(f"File uploaded: {filepath}")
 
     def download_file(self):
+        """Download a file with checksum verification."""
         if not self.session_token:
             messagebox.showerror("Error", "You must log in to download files!")
             return
@@ -516,19 +517,20 @@ class ClientGUI:
             self.update_log("Download canceled.")
             return
 
-        # Request file download from the server
         try:
+            # Connect to the server
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.connect(("localhost", 5000))
             command = f"DOWNLOAD {self.session_token} {selected_file}"
             client_socket.send(command.encode())
 
-            # Handle server response
+            # Receive AES key size
             aes_key_size_bytes = client_socket.recv(4)
             if not aes_key_size_bytes:
                 raise ValueError("No response from server for AES key size.")
             aes_key_size = int.from_bytes(aes_key_size_bytes, 'big')
 
+            # Receive encrypted AES key
             encrypted_aes_key = client_socket.recv(aes_key_size)
             private_key = load_private_key()
             aes_key = private_key.decrypt(
@@ -540,9 +542,17 @@ class ClientGUI:
                 )
             )
 
+            # Receive file size
             file_size_bytes = client_socket.recv(8)
             file_size = int.from_bytes(file_size_bytes, 'big')
 
+            # Receive checksum
+            checksum_size_bytes = client_socket.recv(4)
+            checksum_size = int.from_bytes(checksum_size_bytes, 'big')
+            received_checksum = client_socket.recv(checksum_size).decode()
+            logging.debug(f"Received checksum: {received_checksum}")
+
+            # Receive encrypted file data
             encrypted_file_data = b""
             total_received = 0
             while total_received < file_size:
@@ -555,15 +565,27 @@ class ClientGUI:
             # Decrypt the file
             decrypted_file_data = decrypt_file(encrypted_file_data, aes_key)
 
+            # Compute checksum and validate
+            computed_checksum = hashlib.sha256(decrypted_file_data).hexdigest()
+            logging.debug(f"Computed checksum: {computed_checksum}")
+
+            if computed_checksum != received_checksum:
+                messagebox.showerror("Error", "Checksum mismatch! The file may be corrupted.")
+                self.update_log("Checksum mismatch! File download failed.")
+                return
+
             # Save the file locally
             with open(save_path, "wb") as file:
                 file.write(decrypted_file_data)
 
             self.update_log(f"File '{selected_file}' downloaded and saved to: {save_path}")
+
         except Exception as e:
             messagebox.showerror("Error", str(e))
+            self.update_log(f"Error during download: {e}")
         finally:
             client_socket.close()
+
 
     def list_files(self):
         if not self.session_token:

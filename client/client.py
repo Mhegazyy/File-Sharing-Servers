@@ -254,9 +254,8 @@ def upload_file():
         logging.debug("Client socket closed.")
 
 
-
 def download_file():
-    """Download a file from the server."""
+    """Download a file from the server with checksum verification."""
     logging.debug("Starting the download process...")
 
     # Fetch the list of files
@@ -345,6 +344,12 @@ def download_file():
         file_size = int.from_bytes(file_size_bytes, 'big')
         logging.debug(f"Received file size: {file_size}")
 
+        # Receive checksum
+        checksum_size_bytes = client_socket.recv(4)
+        checksum_size = int.from_bytes(checksum_size_bytes, 'big')
+        received_checksum = client_socket.recv(checksum_size).decode()
+        logging.debug(f"Received checksum: {received_checksum}")
+
         # Receive encrypted file data
         encrypted_file_data = b""
         total_received = 0
@@ -359,8 +364,18 @@ def download_file():
 
         # Decrypt file data
         decrypted_file_data = decrypt_file(encrypted_file_data, aes_key)
-        logging.debug(f"Decrypted file data successfully. Writing to: {save_path}")
+        logging.debug("Decrypted file data successfully.")
 
+        # Compute checksum and validate
+        computed_checksum = hashlib.sha256(decrypted_file_data).hexdigest()
+        logging.debug(f"Computed checksum: {computed_checksum}")
+
+        if computed_checksum != received_checksum:
+            logging.error("Checksum mismatch! File may be corrupted.")
+            print("Error: Checksum mismatch! File may be corrupted.")
+            return
+
+        # Save the file locally
         with open(save_path, "wb") as file:
             file.write(decrypted_file_data)
         logging.info(f"File downloaded and saved successfully to: {save_path}")
@@ -371,6 +386,7 @@ def download_file():
     finally:
         client_socket.close()
         logging.debug("Client socket closed.")
+
 
 def start_client():
     global session_token, current_username
